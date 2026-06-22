@@ -22,6 +22,16 @@ class CraftingState(BaseModel):
     base_progress: float
     base_quality: float
     step: int
+    iq: int
+    innov: int
+    vener: int
+    wn: int
+    gs: int
+    manip: int
+    muscle: int
+    combo: int
+    p_avail: int
+    p_active: int
 
 
 # ================= 扩展到 25 个技能 (拆分俭约与长期俭约) =================
@@ -204,12 +214,14 @@ def gpu_mcts(state_data: CraftingState):
     start_time = time.time()
     env = GPUCraftingEnv(batch_size=150000)
 
+    # 构建初始 17 维张量 (继承前端传来的 Buff 状态)
     initial_tensor = torch.tensor([
         state_data.cp, state_data.durability, state_data.progress,
         state_data.quality, state_data.condition, state_data.max_progress,
-        0, 0, 0, 0, 0, 0, 0,
+        state_data.iq, state_data.innov, state_data.vener, state_data.wn,
+        state_data.gs, state_data.manip, state_data.muscle,
         state_data.step,
-        0, 1, 0
+        state_data.combo, state_data.p_avail, state_data.p_active
     ], dtype=torch.float32, device=DEVICE)
 
     states = initial_tensor.repeat(env.batch_size, 1)
