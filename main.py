@@ -21,6 +21,7 @@ class CraftingState(BaseModel):
     max_progress: int
     base_progress: float
     base_quality: float
+    step: int
 
 
 # ================= 扩展到 25 个技能 (拆分俭约与长期俭约) =================
@@ -207,7 +208,9 @@ def gpu_mcts(state_data: CraftingState):
     initial_tensor = torch.tensor([
         state_data.cp, state_data.durability, state_data.progress,
         state_data.quality, state_data.condition, state_data.max_progress,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0
+        0, 0, 0, 0, 0, 0, 0,
+        state_data.step, # <--- 之前这里写死了 0，现在改成动态的！
+        0, 1, 0
     ], dtype=torch.float32, device=DEVICE)
 
     states = initial_tensor.repeat(env.batch_size, 1)
