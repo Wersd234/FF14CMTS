@@ -305,13 +305,13 @@ def gpu_mcts(state_data: CraftingState):
 
 
 @app.post("/solve_step")
-async def solve_step(state: CraftingState):
+def solve_step(state: CraftingState):
     best_action_id = gpu_mcts(state)
     return {"action_id": best_action_id}
 
 
 @app.get("/warmup")
-async def warmup():
+def warmup():
     dummy = CraftingState(
         cp=600, durability=80, progress=0, quality=0, condition=0,
         max_progress=1000, max_quality=1000, base_progress=600, base_quality=300,
