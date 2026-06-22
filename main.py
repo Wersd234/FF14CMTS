@@ -210,11 +210,11 @@ class GPUCraftingEnv:
 
 # 加上不计算梯度的指令，极限节省显存
 @torch.no_grad()
+@torch.no_grad()
 def gpu_mcts(state_data: CraftingState):
     start_time = time.time()
-    env = GPUCraftingEnv(batch_size=1500000)
+    env = GPUCraftingEnv(batch_size=150000)
 
-    # 构建初始 17 维张量 (继承前端传来的 Buff 状态)
     initial_tensor = torch.tensor([
         state_data.cp, state_data.durability, state_data.progress,
         state_data.quality, state_data.condition, state_data.max_progress,
@@ -231,53 +231,104 @@ def gpu_mcts(state_data: CraftingState):
     actions = first_actions.clone()
     active_mask = torch.ones(env.batch_size, dtype=torch.bool, device=DEVICE)
 
-    # 🚀 视距拉长至 40 步，完美覆盖最高难度的配方寿命
     search_depth = 40
 
     for _ in range(search_depth):
-        # 向前推演一步
         new_states, step_active = env.batch_step(states, actions, state_data.base_progress, state_data.base_quality)
-
-        # ================= 🧟 核心修复：封印僵尸 =================
-        # 如果这个平行宇宙在这一步之前就已经死了 (active_mask == False)
-        # 那么它的状态将被强行冻结，停留在死前那一刻，绝不继承死后的乱按结果！
         states = torch.where(active_mask.unsqueeze(1), new_states, states)
-
-        # 更新存活名单
         active_mask = active_mask & step_active
+        actions = torch.where(active_mask, torch.randint(0, num_actions, (env.batch_size,), device=DEVICE),
+                              torch.tensor(0, device=DEVICE))
 
-        # 随机抽取下一步技能
-        actions = torch.randint(0, num_actions, (env.batch_size,), device=DEVICE)
-
-    # ================= 🌟 终极计分系统 (Dense Reward) 🌟 =================
     final_cp = states[:, 0]
     final_dur = states[:, 1]
     final_prog = states[:, 2]
     final_qual = torch.clamp(states[:, 3], max=state_data.max_quality)
 
     success = final_prog >= state_data.max_progress
+    dense_score = (final_prog / state_data.max_progress) * 10000.0 + final_dur * 10.0 + final_cp * 1.0
+    success_score = 1000000.0 + final_qual * 100.0 + final_dur * 10.0 + final_cp * 5.0
+    scores = torch.where(success, success_score, dense_score)
 
-    # 基础分：给 AI 指明方向！
-    # 进展最重要(x100)，品质其次(x10)，活得越健康越好(耐久x200，CPx5)
-    dense_score = final_prog * 100.0 + final_qual * 10.0 + final_dur * 200.0 + final_cp * 5.0
+    # ================= 🛡️ 核心修复：根节点真实合法动作过滤 =================
+    legal_actions = []
 
-    # 如果推满了进展（真正存活并做出了成品）：给予一千万分的核爆级奖励！
-    # 此时它会转而追求品质的最大化
-    scores = torch.where(success, 10000000.0 + final_qual * 100.0 + final_cp * 10.0, dense_score)
+    cp = state_data.cp;
+    cond = state_data.condition;
+    step = state_data.step
+    iq = state_data.iq;
+    innov = state_data.innov;
+    vener = state_data.vener
+    wn = state_data.wn;
+    gs = state_data.gs;
+    manip = state_data.manip
+    combo = state_data.combo;
+    p_avail = state_data.p_avail
 
-    best_action = 0
+    cost_18_act = 18 if combo == 1 else 32
+    cost_19_act = 18 if combo == 2 else 46
+    cost_map = {
+        1: 18, 2: 88, 3: 7, 4: 18, 5: 18, 6: 56, 7: 32, 8: 24, 9: 96,
+        10: 6, 11: 24, 12: 7, 13: 18, 14: 40, 15: 25, 16: 0, 17: 0,
+        20: 0, 21: 18, 22: 6, 23: 0, 24: 98
+    }
+
+    for a in range(num_actions):
+        is_legal = True
+
+        # 1. 过滤蓝耗不足的技能
+        cost = cost_map.get(a, 0)
+        if a == 18: cost = cost_18_act
+        if a == 19: cost = cost_19_act
+        if cp < cost: is_legal = False
+
+        # 2. 过滤不满足前置条件的技能
+        if a in [20, 21, 22] and cond not in [1, 2]: is_legal = False
+        if a == 23 and p_avail == 0: is_legal = False
+        if a in [10, 11] and step > 0: is_legal = False
+        if a == 8 and iq == 0: is_legal = False
+        if a == 15 and wn > 0: is_legal = False
+
+        # 3. 过滤重复覆盖的 Buff (防止刷分)
+        if a == 9 and manip > 0: is_legal = False
+        if a in [6, 24] and wn > 0: is_legal = False
+        if a == 4 and innov > 0: is_legal = False
+        if a == 5 and vener > 0: is_legal = False
+        if a == 7 and gs > 0: is_legal = False
+
+        if is_legal:
+            legal_actions.append(a)
+
+    # 兜底：如果穷途末路所有技能都黑了，只能打基础制作(0)
+    if not legal_actions:
+        legal_actions = [0]
+    # =====================================================================
+
+    best_action = legal_actions[0]
     best_score = -1.0
 
-    print(f"--- 15万次 x {search_depth}步 宇宙推演结束 (耗时: {(time.time() - start_time) * 1000:.1f}ms) ---")
-    for a in range(num_actions):
+    print(f"--- 15万次 x {search_depth}步 推演结束 (耗时: {(time.time() - start_time) * 1000:.1f}ms) ---")
+
+    # ⚠️ 只在现实合法的技能里选最高分！
+    for a in legal_actions:
         avg_score = scores[first_actions == a].mean().item()
-        # 打印排名前列的技能期望，方便你 Debug
+
+        # ================= 🛡️ 风险厌恶机制 (反赌狗系统) =================
+        # 16: 仓促 (60%成功率), 17: 高速制作 (50%成功率)
+        # 将赌狗技能的期望分强行压缩到 2% (0.02)。
+        # 这样它们永远比不过稳妥成功的 100万 分，但能稳稳击败必死局的 1万 保底分！
+        if a in [16, 17]:
+            avg_score = avg_score * 0.02
+        # ================================================================
+
         if avg_score > 0:
-            print(f"技能 {a} 期望分数: {avg_score:.0f}")
+            print(f"合法技能 [{a}] 期望分数: {avg_score:.0f}")
 
         if avg_score > best_score:
             best_score = avg_score
             best_action = a
+
+    return ACTION_MAP[best_action]
 
     return ACTION_MAP[best_action]
 
