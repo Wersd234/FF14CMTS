@@ -1,8 +1,17 @@
-import torch
+
 from fastapi import FastAPI
 from pydantic import BaseModel
 import uvicorn
 import time
+import torch
+
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+if DEVICE == 'cuda':
+    # 3090 的 15% 显存大约是 3.6 GB
+    # 刚好填入你剩下的 5.5 GB 空白区，且不会挤爆显存！
+    torch.cuda.set_per_process_memory_fraction(0.15, 0)
+
 
 app = FastAPI()
 
