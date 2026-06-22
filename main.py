@@ -9,7 +9,7 @@ torch.backends.cudnn.benchmark = True
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 if DEVICE == 'cuda':
-    torch.cuda.set_per_process_memory_fraction(0.15, 0)
+    torch.cuda.set_per_process_memory_fraction(0.20, 0)
 
 class CraftingState(BaseModel):
     cp: int
@@ -212,7 +212,7 @@ class GPUCraftingEnv:
 @torch.no_grad()
 def gpu_mcts(state_data: CraftingState):
     start_time = time.time()
-    env = GPUCraftingEnv(batch_size=150000)
+    env = GPUCraftingEnv(batch_size=1500000)
 
     # 构建初始 17 维张量 (继承前端传来的 Buff 状态)
     initial_tensor = torch.tensor([
