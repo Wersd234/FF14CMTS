@@ -17,6 +17,7 @@ class CraftingState(BaseModel):
     progress: int
     quality: int
     condition: int
+    max_quality: int
     max_progress: int
     base_progress: float
     base_quality: float
@@ -225,11 +226,12 @@ def gpu_mcts(state_data: CraftingState):
         actions = torch.where(active_mask, torch.randint(0, num_actions, (env.batch_size,), device=DEVICE),
                               torch.tensor(0, device=DEVICE))
 
-    # 评分逻辑
+    # 评分逻辑: 进展满后看品质，品质封顶不给额外分
     final_prog = states[:, 2]
-    final_qual = states[:, 3]
-    success = final_prog >= state_data.max_progress
+    # 把品质“截断”在满品质数值，防止溢出浪费动作
+    final_qual = torch.clamp(states[:, 3], max=state_data.max_quality)
 
+    success = final_prog >= state_data.max_progress
     scores = final_qual * success.float()
 
     best_action = 0
