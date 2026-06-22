@@ -198,18 +198,17 @@ class GPUCraftingEnv:
         return new_states, is_active
 
 
-# 加上这个装饰器，告诉 PyTorch 我们不练大模型，不计算梯度，显存占用直降 90%！
+# 加上不计算梯度的指令，极限节省显存
 @torch.no_grad()
 def gpu_mcts(state_data: CraftingState):
     start_time = time.time()
     env = GPUCraftingEnv(batch_size=150000)
 
-    # 初始 17 维张量
     initial_tensor = torch.tensor([
         state_data.cp, state_data.durability, state_data.progress,
         state_data.quality, state_data.condition, state_data.max_progress,
         0, 0, 0, 0, 0, 0, 0,
-        state_data.step, # <--- 之前这里写死了 0，现在改成动态的！
+        state_data.step,
         0, 1, 0
     ], dtype=torch.float32, device=DEVICE)
 
@@ -220,29 +219,50 @@ def gpu_mcts(state_data: CraftingState):
     actions = first_actions.clone()
     active_mask = torch.ones(env.batch_size, dtype=torch.bool, device=DEVICE)
 
-    # 🚀 这里改成了 30 步！完美覆盖一个高难配方的完整生命周期
-    search_depth = 30
+    # 🚀 视距拉长至 40 步，完美覆盖最高难度的配方寿命
+    search_depth = 40
 
     for _ in range(search_depth):
-        states, is_active = env.batch_step(states, actions, state_data.base_progress, state_data.base_quality)
-        active_mask = active_mask & is_active
-        actions = torch.where(active_mask, torch.randint(0, num_actions, (env.batch_size,), device=DEVICE),
-                              torch.tensor(0, device=DEVICE))
+        # 向前推演一步
+        new_states, step_active = env.batch_step(states, actions, state_data.base_progress, state_data.base_quality)
 
-    # 评分逻辑: 进展满后看品质，品质封顶不给额外分
+        # ================= 🧟 核心修复：封印僵尸 =================
+        # 如果这个平行宇宙在这一步之前就已经死了 (active_mask == False)
+        # 那么它的状态将被强行冻结，停留在死前那一刻，绝不继承死后的乱按结果！
+        states = torch.where(active_mask.unsqueeze(1), new_states, states)
+
+        # 更新存活名单
+        active_mask = active_mask & step_active
+
+        # 随机抽取下一步技能
+        actions = torch.randint(0, num_actions, (env.batch_size,), device=DEVICE)
+
+    # ================= 🌟 终极计分系统 (Dense Reward) 🌟 =================
+    final_cp = states[:, 0]
+    final_dur = states[:, 1]
     final_prog = states[:, 2]
-    # 把品质“截断”在满品质数值，防止溢出浪费动作
     final_qual = torch.clamp(states[:, 3], max=state_data.max_quality)
 
     success = final_prog >= state_data.max_progress
-    scores = final_qual * success.float()
+
+    # 基础分：给 AI 指明方向！
+    # 进展最重要(x100)，品质其次(x10)，活得越健康越好(耐久x200，CPx5)
+    dense_score = final_prog * 100.0 + final_qual * 10.0 + final_dur * 200.0 + final_cp * 5.0
+
+    # 如果推满了进展（真正存活并做出了成品）：给予一千万分的核爆级奖励！
+    # 此时它会转而追求品质的最大化
+    scores = torch.where(success, 10000000.0 + final_qual * 100.0 + final_cp * 10.0, dense_score)
 
     best_action = 0
     best_score = -1.0
 
-    print(f"--- 15万次 x 30步 宇宙推演结束 (耗时: {(time.time() - start_time) * 1000:.1f}ms) ---")
+    print(f"--- 15万次 x {search_depth}步 宇宙推演结束 (耗时: {(time.time() - start_time) * 1000:.1f}ms) ---")
     for a in range(num_actions):
         avg_score = scores[first_actions == a].mean().item()
+        # 打印排名前列的技能期望，方便你 Debug
+        if avg_score > 0:
+            print(f"技能 {a} 期望分数: {avg_score:.0f}")
+
         if avg_score > best_score:
             best_score = avg_score
             best_action = a
